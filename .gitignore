@@ -1,0 +1,7 @@
+output/*
+!output/.gitkeep
+.env
+*.apk
+*.aab
+*.ipa
+node_modules/
