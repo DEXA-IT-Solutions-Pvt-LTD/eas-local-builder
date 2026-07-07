@@ -115,7 +115,7 @@ $Stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
 $BuildId = "remote-win-$Stamp-$PID"
 $RemoteSrc = "/tmp/eas-local-remote-src/$BuildId"
 $RemoteMarker = "/tmp/eas-local-remote-src/$BuildId.marker"
-$LocalTar = Join-Path $env:TEMP "$BuildId.tar.gz"
+$LocalTar = Join-Path ([System.IO.Path]::GetTempPath()) "$BuildId.tar.gz"
 
 function Remove-RemoteCopy {
     & ssh @SshOpts $RemoteHost "rm -rf '$RemoteSrc' '$RemoteMarker'" 2>$null | Out-Null
