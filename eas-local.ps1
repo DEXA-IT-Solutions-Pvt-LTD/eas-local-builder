@@ -146,9 +146,10 @@ try {
     Write-Host "==> Fetching log"
     $RemoteLog = & ssh @SshOpts $RemoteHost "find '$RemoteDir/logs' -maxdepth 1 -type f -newer '$RemoteMarker' -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-"
     if ($RemoteLog) {
-        New-Item -ItemType Directory -Force -Path (Join-Path $OutDir "logs") | Out-Null
-        & scp @SshOpts "${RemoteHost}:$RemoteLog" (Join-Path $OutDir "logs\")
-        Write-Host "==> Log saved to $(Join-Path $OutDir "logs\$(Split-Path -Leaf $RemoteLog)")"
+        $LogsDir = Join-Path $OutDir "logs"
+        New-Item -ItemType Directory -Force -Path $LogsDir | Out-Null
+        & scp @SshOpts "${RemoteHost}:$RemoteLog" $LogsDir
+        Write-Host "==> Log saved to $(Join-Path $LogsDir (Split-Path -Leaf $RemoteLog))"
     }
 
     if ($BuildStatus -ne 0) {
@@ -164,7 +165,7 @@ try {
     }
 
     New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
-    & scp @SshOpts "${RemoteHost}:$RemoteArtifact" "$OutDir\"
+    & scp @SshOpts "${RemoteHost}:$RemoteArtifact" $OutDir
     Write-Host "==> Done. Artifact: $(Join-Path $OutDir (Split-Path -Leaf $RemoteArtifact))"
 }
 finally {
