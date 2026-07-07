@@ -2,33 +2,54 @@
 # Drop-in local-build wrapper that mirrors eas-cli's own syntax, so anyone
 # used to `eas build` can use this with zero new syntax to learn.
 #
-# Run it from inside your Expo project (same as real `eas build`):
+# Local mode — build.sh/run-build.sh already installed on this machine:
 #   EXPO_TOKEN=xxx /path/to/eas-local build --platform android --profile preview
 #
-# Or add an alias so it's literally a drop-in swap for `eas`:
+# Remote mode — nothing needs to be pre-copied to the server. This tars your
+# project, streams it over SSH into a throwaway temp dir on the server,
+# triggers the build there, copies the artifact back, then deletes the
+# remote copy. Nothing of your source persists on the server afterward.
+#   EXPO_TOKEN=xxx /path/to/eas-local build --platform android --profile preview \
+#     --remote ubuntu@ec2-13-203-69-0.ap-south-1.compute.amazonaws.com \
+#     --key ~/nuketest/admini/Admini_t3.pem
+#
+# Add an alias so it's a literal drop-in swap for `eas`:
 #   alias eas-local=/path/to/eas-local-builder/eas-local
-#   eas-local build --platform android --profile preview
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$PWD"
 PLATFORM="android"
 PROFILE="preview"
+REMOTE_HOST=""
+REMOTE_KEY=""
+REMOTE_DIR="eas-local-builder"
+OUT_DIR="./eas-local-output"
 
 COMMAND="${1:-}"
 shift || true
 
 usage() {
   cat >&2 <<'EOF'
-Usage: eas-local build --platform <android|ios> [--profile <name>] [--project-dir <path>]
+Usage: eas-local build --platform <android|ios> [--profile <name>] [options]
 
   --platform     android or ios (ios is not supported — needs macOS/Xcode)
   --profile      eas.json build profile to use (default: preview)
   --project-dir  path to the Expo project (default: current directory)
 
-Example:
+Remote mode (build on a server instead of this machine):
+  --remote       ssh target, e.g. ubuntu@ec2-13-203-69-0.ap-south-1.compute.amazonaws.com
+  --key          path to SSH identity file (.pem)
+  --remote-dir   path to eas-local-builder on the server (default: ~/eas-local-builder)
+  --out          local dir to copy the artifact into (default: ./eas-local-output)
+
+Examples:
   cd ~/Admini-Mobile-App-Client
   EXPO_TOKEN=xxx /path/to/eas-local-builder/eas-local build --platform android --profile preview
+
+  EXPO_TOKEN=xxx /path/to/eas-local-builder/eas-local build --platform android --profile preview \
+    --remote ubuntu@ec2-13-203-69-0.ap-south-1.compute.amazonaws.com \
+    --key ~/nuketest/admini/Admini_t3.pem
 EOF
   exit 1
 }
@@ -40,6 +61,10 @@ while [ $# -gt 0 ]; do
     --platform) PLATFORM="$2"; shift 2 ;;
     --profile) PROFILE="$2"; shift 2 ;;
     --project-dir) PROJECT_DIR="$2"; shift 2 ;;
+    --remote) REMOTE_HOST="$2"; shift 2 ;;
+    --key) REMOTE_KEY="$2"; shift 2 ;;
+    --remote-dir) REMOTE_DIR="$2"; shift 2 ;;
+    --out) OUT_DIR="$2"; shift 2 ;;
     -h|--help) usage ;;
     *) echo "error: unknown flag '$1'" >&2; usage ;;
   esac
@@ -51,4 +76,72 @@ if [ ! -f "$PROJECT_DIR/eas.json" ]; then
   exit 1
 fi
 
-exec "$SCRIPT_DIR/scripts/run-build.sh" "$PROJECT_DIR" "$PLATFORM" "$PROFILE"
+: "${EXPO_TOKEN:?EXPO_TOKEN env var is required}"
+
+# ---------------------------------------------------------------------------
+# Local mode: everything (image, scripts) already lives on this machine.
+# ---------------------------------------------------------------------------
+if [ -z "$REMOTE_HOST" ]; then
+  exec "$SCRIPT_DIR/scripts/run-build.sh" "$PROJECT_DIR" "$PLATFORM" "$PROFILE"
+fi
+
+# ---------------------------------------------------------------------------
+# Remote mode: tar the project, stream it to a throwaway dir on the server,
+# build there, copy the artifact back, delete the remote copy.
+# ---------------------------------------------------------------------------
+if [ "$PLATFORM" = "ios" ]; then
+  echo "error: iOS builds require macOS/Xcode — not possible via this builder." >&2
+  exit 1
+fi
+
+SSH_OPTS=(-o ConnectTimeout=10)
+[ -n "$REMOTE_KEY" ] && SSH_OPTS+=(-i "$REMOTE_KEY")
+
+BUILD_ID="remote-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+REMOTE_SRC="/tmp/eas-local-remote-src/$BUILD_ID"
+REMOTE_MARKER="/tmp/eas-local-remote-src/$BUILD_ID.marker"
+
+cleanup() {
+  echo "==> Cleaning up remote source copy ($REMOTE_SRC)"
+  ssh "${SSH_OPTS[@]}" "$REMOTE_HOST" "rm -rf '$REMOTE_SRC' '$REMOTE_MARKER'" 2>/dev/null || true
+}
+trap cleanup EXIT
+
+echo "==> Packaging project and streaming to $REMOTE_HOST:$REMOTE_SRC"
+ssh "${SSH_OPTS[@]}" "$REMOTE_HOST" "mkdir -p '$REMOTE_SRC' && touch '$REMOTE_MARKER'"
+tar czf - \
+  --exclude node_modules \
+  --exclude .git \
+  --exclude android/build \
+  --exclude android/app/build \
+  --exclude ios/build \
+  --exclude .expo \
+  -C "$PROJECT_DIR" . \
+  | ssh "${SSH_OPTS[@]}" "$REMOTE_HOST" "tar xzf - -C '$REMOTE_SRC'"
+
+echo "==> Triggering build on $REMOTE_HOST"
+set +e
+ssh "${SSH_OPTS[@]}" "$REMOTE_HOST" \
+  "EXPO_TOKEN='$EXPO_TOKEN' '$REMOTE_DIR/scripts/run-build.sh' '$REMOTE_SRC' '$PLATFORM' '$PROFILE'"
+BUILD_STATUS=$?
+set -e
+
+if [ "$BUILD_STATUS" -ne 0 ]; then
+  echo "==> Remote build FAILED (exit $BUILD_STATUS)" >&2
+  exit "$BUILD_STATUS"
+fi
+
+echo "==> Finding artifact newer than $REMOTE_MARKER"
+REMOTE_ARTIFACT="$(ssh "${SSH_OPTS[@]}" "$REMOTE_HOST" \
+  "find '$REMOTE_DIR/output' -maxdepth 1 -type f -newer '$REMOTE_MARKER' -printf '%T@ %p\n' | sort -rn | head -1 | cut -d' ' -f2-")"
+
+if [ -z "$REMOTE_ARTIFACT" ]; then
+  echo "error: build reported success but no new artifact was found in $REMOTE_DIR/output" >&2
+  exit 1
+fi
+
+mkdir -p "$OUT_DIR"
+echo "==> Copying $REMOTE_ARTIFACT back to $OUT_DIR/"
+scp "${SSH_OPTS[@]}" "$REMOTE_HOST:$REMOTE_ARTIFACT" "$OUT_DIR/"
+
+echo "==> Done. Artifact: $OUT_DIR/$(basename "$REMOTE_ARTIFACT")"

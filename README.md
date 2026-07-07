@@ -4,21 +4,27 @@ Self-hosted replacement for **EAS cloud build compute**. Same `eas-cli`,
 same credentials, same `eas.json` profiles — the only thing that changes is
 *where the build runs*: our own server instead of Expo's paid build queue.
 
-## TL;DR — try it in 3 commands
+## TL;DR — try it in one command
 
 If you already know `eas build`, you already know this. From inside the
-mobile app project directory:
+mobile app project directory, on **your own laptop** — nothing needs to be
+pre-installed or pre-copied to the server:
 
 ```bash
 export EXPO_TOKEN=<your Expo access token>
-/path/to/eas-local-builder/eas-local build --platform android --profile preview
-# ... same eas-cli output you already know ...
-# APK lands in /path/to/eas-local-builder/output/
+/path/to/eas-local-builder/eas-local build --platform android --profile preview \
+  --remote ubuntu@ec2-13-203-69-0.ap-south-1.compute.amazonaws.com \
+  --key ~/nuketest/admini/Admini_t3.pem
+# ... same eas-cli output you already know, streamed live ...
+# APK lands in ./eas-local-output/ on YOUR machine
 ```
 
-No new flags, no new mental model. `eas-local` is a thin wrapper that mirrors
-`eas build`'s own syntax (`--platform`, `--profile`) and runs it inside a
-disposable Docker container on our infrastructure instead of Expo's.
+No new flags beyond pointing at the server, no new mental model. `eas-local`
+mirrors `eas build`'s own syntax (`--platform`, `--profile`) and, in
+`--remote` mode, tars your project, streams it over SSH into a throwaway
+directory on the server, builds it there in a disposable Docker container,
+copies the artifact back to your machine, then deletes the remote copy.
+Nothing of your source persists on the server between builds.
 
 ## Why this exists
 
@@ -36,42 +42,58 @@ free compute.
 This isn't a proposal — it's built, tested, and producing real signed
 builds today. Verified runs on `ec2-13-203-69-0.ap-south-1.compute.amazonaws.com`:
 
-| Profile      | Output                          | Size   | Build time |
-|--------------|----------------------------------|--------|------------|
-| `preview`    | installable `.apk`               | 110 MB | ~19 min    |
-| `production` | Play Store `.aab`                | 62 MB  | ~20 min    |
+| Profile      | Mode   | Output              | Size   | Build time |
+|--------------|--------|---------------------|--------|------------|
+| `preview`    | local  | installable `.apk`  | 110 MB | ~19 min    |
+| `production` | local  | Play Store `.aab`   | 62 MB  | ~20 min    |
+| `preview`    | remote | installable `.apk`  | 110 MB | ~19 min (tar/scp overhead negligible on top) |
 
-Both used real project source, real signing credentials pulled from Expo,
-and produced artifacts an `eas build --local` run would have produced
-identically — just without the EAS cloud queue or bill.
+All three used real project source, real signing credentials pulled from
+Expo, and produced artifacts an `eas build --local` run would have produced
+identically — just without the EAS cloud queue or bill. The remote run
+confirmed the full tar → stream → build → copy-back → cleanup loop end to
+end, including the artifact landing on the *triggering* machine rather than
+the server.
 
 ## Architecture
 
 ```
-eas-local build --platform android --profile preview     (what you type)
+eas-local build --platform android --profile preview --remote ... --key ...
+  (run on YOUR laptop, inside the project directory)
   │
-  ▼
-scripts/run-build.sh (host)
-  ├─ flock            serializes builds — two runs never race the shared cache
-  ├─ timeout 1h        kills a hung build instead of leaving it running forever
-  └─ docker run --rm --memory=8g --cpus=4   (ephemeral, resource-capped)
-       │
-       ▼
-     scripts/build.sh (container entrypoint)
-       ├─ copies /source (read-only mount) into writable /workspace
-       ├─ git init (source is copied without .git for a clean sandbox;
-       │            eas build needs *a* repo to fingerprint the build)
-       ├─ npm install
-       └─ eas build --local --platform android --profile preview
-            → pulls signing credentials from Expo via EXPO_TOKEN
-            → same eas-cli / @expo/build-tools code path as EAS cloud
-            → artifact written to /output (bind-mounted back to host)
+  ├─ tar czf project (excludes node_modules, .git, build/) ──ssh──▶ /tmp/eas-local-remote-src/<id>/  (server, throwaway)
+  │
+  ▼ (ssh) triggers on the server:
+  scripts/run-build.sh
+    ├─ flock            serializes builds — two runs never race the shared cache
+    ├─ timeout 1h        kills a hung build instead of leaving it running forever
+    └─ docker run --rm --memory=8g --cpus=4   (ephemeral, resource-capped)
+         │
+         ▼
+       scripts/build.sh (container entrypoint)
+         ├─ copies /source (read-only mount) into writable /workspace
+         ├─ git init (source is copied without .git for a clean sandbox;
+         │            eas build needs *a* repo to fingerprint the build)
+         ├─ npm install
+         └─ eas build --local --platform android --profile preview
+              → pulls signing credentials from Expo via EXPO_TOKEN
+              → same eas-cli / @expo/build-tools code path as EAS cloud
+              → artifact written to server's ./output/
+  │
+  ◀─ scp artifact back to YOUR laptop's ./eas-local-output/
+  │
+  └─ rm -rf the /tmp/eas-local-remote-src/<id>/ copy on the server
 ```
 
 Your project's actual `node_modules`/`.gradle`/git history are never
-touched — the container works on a throwaway copy. Gradle and npm caches
-persist across builds in named Docker volumes so dependencies aren't
-re-downloaded every time.
+touched locally either — only a filtered tar of the source leaves your
+machine. Gradle and npm caches persist across builds in named Docker
+volumes *on the server* so dependencies aren't re-downloaded every time,
+but the project source itself never lingers there between builds.
+
+(If you're working directly on the server instead of from a laptop, drop
+`--remote`/`--key` and it runs against a local path exactly as before —
+see "Local mode" below.)
 
 ## EAS cloud vs. this
 
@@ -87,7 +109,19 @@ re-downloaded every time.
 | SDK/toolchain upgrades | Expo's problem | Ours — bump versions in `Dockerfile` when Expo SDK bumps |
 | Network isolation from other services | N/A (dedicated infra) | Our responsibility on a shared server (see below) |
 
-## Setup (one-time, per machine/server)
+## Setup
+
+**On your laptop (for `--remote` mode — the recommended path):** nothing
+beyond having `ssh`/`scp`/`tar` (already on macOS/Linux; on Windows use
+WSL or Git Bash) and a copy of this repo for the `eas-local` script itself:
+
+```bash
+git clone https://github.com/DEXA-IT-Solutions-Pvt-LTD/eas-local-builder.git
+```
+
+No Docker required locally — the build runs on the server.
+
+**On the server (one-time):**
 
 ```bash
 git clone https://github.com/DEXA-IT-Solutions-Pvt-LTD/eas-local-builder.git
@@ -95,13 +129,35 @@ cd eas-local-builder
 docker build -t admini-eas-builder:latest .
 ```
 
-Requires Docker Engine. Nothing else — the image bundles Node, JDK 17,
-Android SDK cmdline-tools, and `eas-cli`.
+Requires Docker Engine on the server. The image bundles Node, JDK 17,
+Android SDK cmdline-tools, and `eas-cli` — already built and live on
+`ec2-13-203-69-0.ap-south-1.compute.amazonaws.com` as of this writing.
 
 ## Usage
 
-**Recommended — the `eas-local` wrapper**, run from inside the mobile app
-project directory (same as real `eas build`):
+**Remote mode (recommended)** — run from your laptop, inside the mobile
+app project directory, same as real `eas build`:
+
+```bash
+export EXPO_TOKEN=<token>
+cd ~/Admini-Mobile-App-Client
+/path/to/eas-local-builder/eas-local build --platform android --profile preview \
+  --remote ubuntu@ec2-13-203-69-0.ap-south-1.compute.amazonaws.com \
+  --key ~/nuketest/admini/Admini_t3.pem
+```
+
+Tip: wrap that in a shell function or alias so it's a one-word command —
+none of the `--remote`/`--key` boilerplate needs retyping each time.
+
+Your project is tarred (excluding `node_modules`, `.git`, build output
+dirs), streamed to a throwaway directory on the server, built there, and
+the artifact is scp'd back to `./eas-local-output/` on your machine. The
+remote copy is deleted afterward — nothing lingers on the server between
+builds except the Docker image and its warm dependency caches.
+
+**Local mode** — if you're working directly on the server (or any machine
+with the image already built there), drop `--remote`/`--key` and it builds
+against a local path instead:
 
 ```bash
 export EXPO_TOKEN=<token>
@@ -109,25 +165,23 @@ cd ~/Admini-Mobile-App-Client
 /path/to/eas-local-builder/eas-local build --platform android --profile preview
 ```
 
-Tip: `alias eas-local=/path/to/eas-local-builder/eas-local` makes it a
-literal drop-in swap for `eas` in daily use.
+In both modes, `--profile` maps directly to `eas.json` build profiles —
+`preview` (default) builds an installable `.apk`, `production` builds a
+Play Store `.aab`. The output file extension is picked automatically to
+match.
 
-`--profile` maps directly to `eas.json` build profiles — `preview` (default)
-builds an installable `.apk`, `production` builds a Play Store `.aab`. The
-output file extension is picked automatically to match.
-
-**Underlying script** (what `eas-local` calls), if you need to pass an
-explicit path instead of running from inside the project:
+**Underlying script** (what `eas-local` calls in local mode), if you need
+to pass an explicit path instead of running from inside the project:
 
 ```bash
 ./scripts/run-build.sh /path/to/project android preview
 ```
 
-Artifacts land in `./output/`. Each run writes a full log to
-`./logs/build-<timestamp>-<platform>.log` (streamed live to your terminal
-too), and while a build is running you can tail it from another shell with
-`tail -f logs/build-*.log` or `docker logs -f <container-name>` (the
-container name is printed at build start).
+On the server, each run writes a full log to
+`~/eas-local-builder/logs/build-<timestamp>-<platform>.log` (also streamed
+live), and while a build is running you can tail it from another SSH
+session with `tail -f logs/build-*.log` or `docker logs -f <container-name>`
+(the container name is printed at build start).
 
 ## What it does NOT solve
 
@@ -194,5 +248,6 @@ Documented here so they don't get re-debugged from scratch:
 - [ ] Network-isolate the build container from other production services
 - [ ] Publish the image to GHCR so servers can `docker pull` instead of
       `docker build` (image contains no secrets, safe to make public)
-- [ ] Decide on a recurring source-sync method (currently a one-off rsync
-      for testing) vs. `git clone` per build
+- [x] ~~Decide on a recurring source-sync method~~ — resolved: `eas-local
+      --remote` tars and streams the project fresh per build, so nothing
+      persists on the server between builds. No sync step needed.

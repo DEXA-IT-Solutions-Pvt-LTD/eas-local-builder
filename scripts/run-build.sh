@@ -71,4 +71,8 @@ if [ "$BUILD_STATUS" -ne 0 ]; then
   exit "$BUILD_STATUS"
 fi
 
-echo "==> Done. Artifacts in $OUTPUT_DIR, log saved to $LOG_FILE"
+# Newest file in OUTPUT_DIR is this run's artifact — flock guarantees only
+# one build (thus one writer) at a time, so this is unambiguous.
+ARTIFACT="$(find "$OUTPUT_DIR" -maxdepth 1 -type f ! -name '.gitkeep' -printf '%T@ %p\n' | sort -rn | head -1 | cut -d' ' -f2-)"
+echo "==> Done. Log saved to $LOG_FILE"
+echo "ARTIFACT: $ARTIFACT"
