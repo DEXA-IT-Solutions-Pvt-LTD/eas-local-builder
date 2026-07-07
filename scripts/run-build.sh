@@ -40,9 +40,13 @@ echo "==> Tail from another shell with: tail -f $LOG_FILE"
 echo "==> Or stream the container directly with: docker logs -f $CONTAINER_NAME"
 
 set +e
+# eas-cli's internal build plugin sometimes prints its full subprocess
+# command line on failure, which embeds a base64 job payload containing
+# signing credentials (keystore + passwords) pulled from Expo. Strip any
+# long base64-looking run before it ever reaches disk or the terminal.
 timeout "$BUILD_TIMEOUT" docker run --rm \
   --name "$CONTAINER_NAME" \
-  --memory=4g \
+  --memory=8g \
   --cpus=4 \
   --pids-limit=512 \
   -e EXPO_TOKEN="$EXPO_TOKEN" \
@@ -51,7 +55,9 @@ timeout "$BUILD_TIMEOUT" docker run --rm \
   -v "$OUTPUT_DIR:/output" \
   -v admini-eas-gradle-cache:/root/.gradle \
   -v admini-eas-npm-cache:/root/.npm \
-  "$IMAGE_NAME" 2>&1 | tee "$LOG_FILE"
+  "$IMAGE_NAME" 2>&1 \
+  | sed -E 's/[A-Za-z0-9+\/=]{200,}/[REDACTED-POSSIBLE-SECRET]/g' \
+  | tee "$LOG_FILE"
 BUILD_STATUS="${PIPESTATUS[0]}"
 set -e
 

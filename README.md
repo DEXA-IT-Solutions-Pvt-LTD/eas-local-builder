@@ -91,3 +91,11 @@ to a server is just: install Docker there, `docker build` the same
   (npm postinstall scripts, Gradle plugins). Treat them as untrusted.
 - `EXPO_TOKEN` is injected at container runtime via `-e`, never baked into
   the image.
+- `eas build --local` fetches signing credentials (keystore + passwords)
+  from Expo at build time and, on certain internal failures, has been
+  observed printing them in plaintext as part of a subprocess command line
+  in its own error output. `run-build.sh` pipes all build output through a
+  `sed` filter that redacts any long base64-looking run before it reaches
+  the log file or terminal — but treat any *unfiltered* `eas build --local`
+  output (e.g. running it directly, outside this wrapper) as potentially
+  containing secrets.
