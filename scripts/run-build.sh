@@ -18,9 +18,19 @@ IMAGE_NAME="admini-eas-builder:latest"
 LOCK_FILE="/tmp/admini-eas-build.lock"
 BUILD_TIMEOUT="${BUILD_TIMEOUT:-3600}" # seconds, 1h default
 
-: "${EXPO_TOKEN:?EXPO_TOKEN env var is required (use an Expo robot/access token)}"
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Auto-load .env next to this repo if EXPO_TOKEN wasn't already exported.
+# An explicitly exported EXPO_TOKEN always takes priority.
+if [ -z "${EXPO_TOKEN:-}" ] && [ -f "$SCRIPT_DIR/.env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$SCRIPT_DIR/.env"
+  set +a
+fi
+
+: "${EXPO_TOKEN:?EXPO_TOKEN env var is required (export it, or create .env in the repo root)}"
+
 OUTPUT_DIR="$SCRIPT_DIR/output"
 LOG_DIR="$SCRIPT_DIR/logs"
 mkdir -p "$OUTPUT_DIR" "$LOG_DIR"

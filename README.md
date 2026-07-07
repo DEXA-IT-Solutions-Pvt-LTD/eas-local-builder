@@ -160,10 +160,16 @@ with the image already built there), drop `--remote`/`--key` and it builds
 against a local path instead:
 
 ```bash
-export EXPO_TOKEN=<token>
 cd ~/Admini-Mobile-App-Client
 /path/to/eas-local-builder/eas-local build --platform android --profile preview
 ```
+
+No `export EXPO_TOKEN=...` needed here if a `.env` already exists next to
+`eas-local` (there's one set up on the server already) — both `eas-local`
+and `scripts/run-build.sh` auto-load it when `EXPO_TOKEN` isn't already in
+the environment. An explicitly exported `EXPO_TOKEN` always takes priority
+over `.env`, so this doesn't get in the way of using a different token
+when you need to.
 
 In both modes, `--profile` maps directly to `eas.json` build profiles —
 `preview` (default) builds an installable `.apk`, `production` builds a
