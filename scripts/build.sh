@@ -19,6 +19,15 @@ echo "==> Copying project source into writable workspace"
 cp -a "$SRC_DIR/." "$WORK_DIR/"
 cd "$WORK_DIR"
 
+if [ ! -d .git ]; then
+  echo "==> No .git in source snapshot — initializing one so eas build can fingerprint it"
+  git init -q
+  git config user.email "build@admini-eas-local-builder.local"
+  git config user.name "admini-eas-local-builder"
+  git add -A
+  git commit -q -m "build snapshot" --no-verify
+fi
+
 echo "==> Installing dependencies"
 npm install
 
