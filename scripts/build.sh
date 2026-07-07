@@ -5,6 +5,7 @@ set -euo pipefail
 
 : "${EXPO_TOKEN:?EXPO_TOKEN env var is required}"
 : "${BUILD_PLATFORM:=android}"
+: "${BUILD_PROFILE:=preview}"
 
 SRC_DIR=/source
 WORK_DIR=/workspace
@@ -36,12 +37,23 @@ fi
 echo "==> Installing dependencies"
 npm install
 
-echo "==> Running eas build --local (platform=$BUILD_PLATFORM)"
+# android.buildType per profile in eas.json determines apk vs aab —
+# "preview"/"development" build apk, "production" builds aab.
+EXT="aab"
+if [ "$BUILD_PLATFORM" = "android" ] && node -e "
+    const c = require('./eas.json').build?.['$BUILD_PROFILE']?.android?.buildType;
+    process.exit(c === 'apk' ? 0 : 1);
+  " 2>/dev/null; then
+  EXT="apk"
+fi
+
+echo "==> Running eas build --local (platform=$BUILD_PLATFORM, profile=$BUILD_PROFILE)"
 eas build \
   --local \
   --platform "$BUILD_PLATFORM" \
+  --profile "$BUILD_PROFILE" \
   --non-interactive \
-  --output "$OUT_DIR/app-$(date -u +%Y%m%dT%H%M%SZ).apk"
+  --output "$OUT_DIR/app-$(date -u +%Y%m%dT%H%M%SZ).${EXT}"
 
 echo "==> Build artifact(s) in $OUT_DIR:"
 ls -la "$OUT_DIR"

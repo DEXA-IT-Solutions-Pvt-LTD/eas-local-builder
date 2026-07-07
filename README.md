@@ -57,8 +57,12 @@ docker build -t admini-eas-builder:latest .
 ```bash
 cp .env.example .env   # fill in EXPO_TOKEN
 export $(grep -v '^#' .env | xargs)
-./scripts/run-build.sh /home/bennyhinn/projects/Admini-Mobile-App-Client android
+./scripts/run-build.sh /home/bennyhinn/projects/Admini-Mobile-App-Client android preview
 ```
+
+The third arg is an `eas.json` build profile — `preview` (default) builds an
+installable `.apk`, `production` builds a Play Store `.aab`. The output
+file extension is picked automatically to match.
 
 Artifacts land in `./output/`. Each run writes a full log to
 `./logs/build-<timestamp>-<platform>.log` (streamed live to your terminal

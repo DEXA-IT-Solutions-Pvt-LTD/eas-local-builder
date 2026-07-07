@@ -1,6 +1,9 @@
 #!/bin/bash
 # Host-side trigger. Usage:
-#   EXPO_TOKEN=xxx ./scripts/run-build.sh /path/to/mobile-app [android|ios]
+#   EXPO_TOKEN=xxx ./scripts/run-build.sh /path/to/mobile-app [android|ios] [profile]
+#
+# profile matches an eas.json build profile (e.g. preview -> apk,
+# production -> aab). Defaults to "preview" for a directly-installable apk.
 #
 # - flock serializes builds so two runs never share the gradle/npm cache volume at once
 # - timeout kills a hung build instead of letting it sit forever
@@ -8,8 +11,9 @@
 #   working tree's node_modules/.gradle are never touched
 set -euo pipefail
 
-PROJECT_DIR="${1:?Usage: run-build.sh <path-to-mobile-app-project> [android|ios]}"
+PROJECT_DIR="${1:?Usage: run-build.sh <path-to-mobile-app-project> [android|ios] [profile]}"
 PLATFORM="${2:-android}"
+PROFILE="${3:-preview}"
 IMAGE_NAME="admini-eas-builder:latest"
 LOCK_FILE="/tmp/admini-eas-build.lock"
 BUILD_TIMEOUT="${BUILD_TIMEOUT:-3600}" # seconds, 1h default
@@ -34,7 +38,7 @@ STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 LOG_FILE="$LOG_DIR/build-${STAMP}-${PLATFORM}.log"
 CONTAINER_NAME="admini-eas-build-${STAMP}"
 
-echo "==> Starting build (platform=$PLATFORM, timeout=${BUILD_TIMEOUT}s)"
+echo "==> Starting build (platform=$PLATFORM, profile=$PROFILE, timeout=${BUILD_TIMEOUT}s)"
 echo "==> Live log: $LOG_FILE"
 echo "==> Tail from another shell with: tail -f $LOG_FILE"
 echo "==> Or stream the container directly with: docker logs -f $CONTAINER_NAME"
@@ -51,6 +55,7 @@ timeout "$BUILD_TIMEOUT" docker run --rm \
   --pids-limit=512 \
   -e EXPO_TOKEN="$EXPO_TOKEN" \
   -e BUILD_PLATFORM="$PLATFORM" \
+  -e BUILD_PROFILE="$PROFILE" \
   -v "$PROJECT_DIR:/source:ro" \
   -v "$OUTPUT_DIR:/output" \
   -v admini-eas-gradle-cache:/root/.gradle \
