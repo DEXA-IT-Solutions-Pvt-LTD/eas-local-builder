@@ -210,12 +210,17 @@ Same result as the bash version: project tarred, streamed to a throwaway
 directory on the server, built there, artifact and log copied back to
 `.\eas-local-output\` on the Windows machine, remote copy deleted after.
 
-> **Not yet smoke-tested on a real Windows machine.** The logic mirrors the
-> bash version closely and the remote-side commands are identical (they run
-> over SSH regardless of client OS), but this hasn't had a live run from an
-> actual Windows box yet — the first real run is the real test. If
-> `tar`/`ssh`/`scp` throw errors, confirm the OpenSSH Client optional
-> feature is installed.
+> **Verified with PowerShell 7 on Linux against the real server** — both the
+> failure path (bad build profile: error surfaced live, log auto-fetched)
+> and a full successful build (110MB APK + log landed correctly locally,
+> remote source cleaned up afterward) were run end-to-end and two real bugs
+> were found and fixed this way (`$env:TEMP` doesn't exist outside Windows;
+> a trailing backslash on the scp destination misplaced the artifact).
+> **Not yet run on an actual Windows machine, though** — the remote-side
+> commands are identical regardless of client OS since they run over SSH,
+> but a native Windows run is still worth doing once before the live TL
+> demo. If `tar`/`ssh`/`scp` throw errors there, confirm the OpenSSH Client
+> optional feature is installed (Settings → Apps → Optional Features).
 
 ## Getting logs — including on failure
 
