@@ -153,8 +153,24 @@ cd ~/Admini-Mobile-App-Client
   --key ~/nuketest/admini/Admini_t3.pem
 ```
 
-Tip: wrap that in a shell function or alias so it's a one-word command —
-none of the `--remote`/`--key` boilerplate needs retyping each time.
+**Skip retyping `--remote`/`--key` every time**: create a `.env` file next
+to the `eas-local` script (copy `.env.example`) with:
+
+```
+EXPO_TOKEN=<token>
+EAS_LOCAL_REMOTE_HOST=ubuntu@ec2-13-203-69-0.ap-south-1.compute.amazonaws.com
+EAS_LOCAL_REMOTE_KEY=~/nuketest/admini/Admini_t3.pem
+```
+
+Then the whole thing collapses to:
+
+```bash
+cd ~/Admini-Mobile-App-Client
+/path/to/eas-local-builder/eas-local build --platform android --profile preview
+```
+
+Any of `--remote`/`--key`/`--remote-dir` passed explicitly on the command
+line still override `.env` — this is just a default, not a lock-in.
 
 Your project is tarred (excluding `node_modules`, `.git`, build output
 dirs), streamed to a throwaway directory on the server, built there, and
@@ -209,6 +225,19 @@ C:\path\to\eas-local-builder\eas-local.ps1 build --platform android --profile pr
 Same result as the bash version: project tarred, streamed to a throwaway
 directory on the server, built there, artifact and log copied back to
 `.\eas-local-output\` on the Windows machine, remote copy deleted after.
+
+**Skip retyping `--remote`/`--key` every time**: create a `.env` file next
+to `eas-local.ps1` (copy `.env.example`) with `EXPO_TOKEN`,
+`EAS_LOCAL_REMOTE_HOST`, and `EAS_LOCAL_REMOTE_KEY` — then the command
+collapses to just:
+
+```powershell
+cd C:\path\to\Admini-Mobile-App-Client
+C:\path\to\eas-local-builder\eas-local.ps1 build --platform android --profile preview
+```
+
+Any explicit `--remote`/`--key` flags on the command line still override
+`.env`.
 
 > **Verified with PowerShell 7 on Linux against the real server** — both the
 > failure path (bad build profile: error surfaced live, log auto-fetched)
