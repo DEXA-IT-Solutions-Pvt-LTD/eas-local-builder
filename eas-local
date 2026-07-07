@@ -76,17 +76,27 @@ if [ ! -f "$PROJECT_DIR/eas.json" ]; then
   exit 1
 fi
 
-# Auto-load .env next to this script if EXPO_TOKEN wasn't already exported
-# — convenient in local mode on a server where .env is already set up once.
-# An explicitly exported EXPO_TOKEN always takes priority.
-if [ -z "${EXPO_TOKEN:-}" ] && [ -f "$SCRIPT_DIR/.env" ]; then
-  set -a
-  # shellcheck disable=SC1091
-  source "$SCRIPT_DIR/.env"
-  set +a
+# Auto-load .env next to this script for anything not already exported —
+# EXPO_TOKEN, and optionally EAS_LOCAL_REMOTE_HOST / EAS_LOCAL_REMOTE_KEY /
+# EAS_LOCAL_REMOTE_DIR so --remote/--key/--remote-dir don't need to be
+# typed on every run. Anything already exported always takes priority —
+# read line by line rather than `source` so .env can't clobber it.
+if [ -f "$SCRIPT_DIR/.env" ]; then
+  while IFS='=' read -r key value; do
+    case "$key" in
+      ''|'#'*) continue ;;
+    esac
+    if [ -z "${!key:-}" ]; then
+      export "$key=$value"
+    fi
+  done < "$SCRIPT_DIR/.env"
 fi
 
 : "${EXPO_TOKEN:?EXPO_TOKEN env var is required (export it, or create .env next to this script)}"
+
+[ -z "$REMOTE_HOST" ] && REMOTE_HOST="${EAS_LOCAL_REMOTE_HOST:-}"
+[ -z "$REMOTE_KEY" ] && REMOTE_KEY="${EAS_LOCAL_REMOTE_KEY:-}"
+[ "$REMOTE_DIR" = "eas-local-builder" ] && REMOTE_DIR="${EAS_LOCAL_REMOTE_DIR:-$REMOTE_DIR}"
 
 # ---------------------------------------------------------------------------
 # Local mode: everything (image, scripts) already lives on this machine.

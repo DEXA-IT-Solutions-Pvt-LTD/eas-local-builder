@@ -18,6 +18,13 @@
 #
 # Tip: run from inside the mobile app project directory, same as real
 # `eas build` — or pass --project-dir explicitly.
+#
+# Tip: create a .env file next to this script to avoid retyping
+# --remote/--key/--remote-dir every time:
+#   EXPO_TOKEN=<token>
+#   EAS_LOCAL_REMOTE_HOST=ubuntu@ec2-13-203-69-0.ap-south-1.compute.amazonaws.com
+#   EAS_LOCAL_REMOTE_KEY=C:\keys\Admini_t3.pem
+# Then just: .\eas-local.ps1 build --platform android --profile preview
 
 $ErrorActionPreference = "Stop"
 
@@ -76,13 +83,17 @@ if (-not (Test-Path (Join-Path $ProjectDir "eas.json"))) {
     exit 1
 }
 
-# Auto-load .env next to this script if EXPO_TOKEN wasn't already set.
-if (-not $env:EXPO_TOKEN) {
-    $envFile = Join-Path $ScriptDir ".env"
-    if (Test-Path $envFile) {
-        Get-Content $envFile | ForEach-Object {
-            if ($_ -match '^\s*([^#=][^=]*)=(.*)$') {
-                [System.Environment]::SetEnvironmentVariable($matches[1].Trim(), $matches[2].Trim())
+# Auto-load .env next to this script for anything not already set via env
+# var or flag — EXPO_TOKEN, and optionally EAS_LOCAL_REMOTE_HOST /
+# EAS_LOCAL_REMOTE_KEY / EAS_LOCAL_REMOTE_DIR so --remote/--key/--remote-dir
+# don't need to be typed on every single run.
+$envFile = Join-Path $ScriptDir ".env"
+if (Test-Path $envFile) {
+    Get-Content $envFile | ForEach-Object {
+        if ($_ -match '^\s*([^#=][^=]*)=(.*)$') {
+            $name = $matches[1].Trim()
+            if (-not [System.Environment]::GetEnvironmentVariable($name)) {
+                [System.Environment]::SetEnvironmentVariable($name, $matches[2].Trim())
             }
         }
     }
@@ -92,8 +103,12 @@ if (-not $env:EXPO_TOKEN) {
     exit 1
 }
 
+if (-not $RemoteHost) { $RemoteHost = $env:EAS_LOCAL_REMOTE_HOST }
+if (-not $RemoteKey) { $RemoteKey = $env:EAS_LOCAL_REMOTE_KEY }
+if ($RemoteDir -eq "eas-local-builder" -and $env:EAS_LOCAL_REMOTE_DIR) { $RemoteDir = $env:EAS_LOCAL_REMOTE_DIR }
+
 if (-not $RemoteHost) {
-    Write-Error "This Windows script only supports --remote mode. Pass --remote <user@host> --key <path>."
+    Write-Error "This Windows script only supports --remote mode. Pass --remote <user@host> --key <path>, or set EAS_LOCAL_REMOTE_HOST/EAS_LOCAL_REMOTE_KEY in .env."
     exit 1
 }
 if ($Platform -eq "ios") {
