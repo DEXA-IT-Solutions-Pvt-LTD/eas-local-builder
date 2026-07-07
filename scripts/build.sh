@@ -19,6 +19,11 @@ echo "==> Copying project source into writable workspace"
 cp -a "$SRC_DIR/." "$WORK_DIR/"
 cd "$WORK_DIR"
 
+# cp -a preserves the host's file ownership, which trips git's "dubious
+# ownership" guard. Safe to trust here — this workspace is a disposable,
+# single-use copy inside an ephemeral container.
+git config --global --add safe.directory "$WORK_DIR"
+
 if [ ! -d .git ]; then
   echo "==> No .git in source snapshot — initializing one so eas build can fingerprint it"
   git init -q
