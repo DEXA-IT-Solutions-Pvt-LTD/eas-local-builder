@@ -60,7 +60,11 @@ export $(grep -v '^#' .env | xargs)
 ./scripts/run-build.sh /home/bennyhinn/projects/Admini-Mobile-App-Client android
 ```
 
-Artifacts land in `./output/`.
+Artifacts land in `./output/`. Each run writes a full log to
+`./logs/build-<timestamp>-<platform>.log` (streamed live to your terminal
+too via `tee`), and while a build is running you can tail it from another
+shell with `tail -f logs/build-*.log` or `docker logs -f <container-name>`
+(the container name is printed at build start).
 
 ## Testing locally before shipping to any server
 
