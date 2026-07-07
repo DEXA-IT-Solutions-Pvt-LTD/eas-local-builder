@@ -12,14 +12,14 @@ pre-installed or pre-copied to the server:
 
 ```bash
 export EXPO_TOKEN=<your Expo access token>
-/path/to/eas-local-builder/eas-local build --platform android --profile preview \
-  --remote ubuntu@ec2-13-203-69-0.ap-south-1.compute.amazonaws.com \
-  --key ~/nuketest/admini/Admini_t3.pem
+/path/to/eas-local-builder/ssheas build --platform android --profile preview \
+  --remote ubuntu@your-server-host \
+  --key ~/keys/admini-build-server.pem
 # ... same eas-cli output you already know, streamed live ...
-# APK lands in ./eas-local-output/ on YOUR machine
+# APK lands in ./ssheas-output/ on YOUR machine
 ```
 
-No new flags beyond pointing at the server, no new mental model. `eas-local`
+No new flags beyond pointing at the server, no new mental model. `ssheas`
 mirrors `eas build`'s own syntax (`--platform`, `--profile`) and, in
 `--remote` mode, tars your project, streams it over SSH into a throwaway
 directory on the server, builds it there in a disposable Docker container,
@@ -40,7 +40,7 @@ free compute.
 ## Status: working, verified on our production server
 
 This isn't a proposal — it's built, tested, and producing real signed
-builds today. Verified runs on `ec2-13-203-69-0.ap-south-1.compute.amazonaws.com`:
+builds today. Verified runs on `your-server-host`:
 
 | Profile      | Mode   | Output              | Size   | Build time |
 |--------------|--------|---------------------|--------|------------|
@@ -58,10 +58,10 @@ the server.
 ## Architecture
 
 ```
-eas-local build --platform android --profile preview --remote ... --key ...
+ssheas build --platform android --profile preview --remote ... --key ...
   (run on YOUR laptop, inside the project directory)
   │
-  ├─ tar czf project (excludes node_modules, .git, build/) ──ssh──▶ /tmp/eas-local-remote-src/<id>/  (server, throwaway)
+  ├─ tar czf project (excludes node_modules, .git, build/) ──ssh──▶ /tmp/ssheas-remote-src/<id>/  (server, throwaway)
   │
   ▼ (ssh) triggers on the server:
   scripts/run-build.sh
@@ -80,9 +80,9 @@ eas-local build --platform android --profile preview --remote ... --key ...
               → same eas-cli / @expo/build-tools code path as EAS cloud
               → artifact written to server's ./output/
   │
-  ◀─ scp artifact back to YOUR laptop's ./eas-local-output/
+  ◀─ scp artifact back to YOUR laptop's ./ssheas-output/
   │
-  └─ rm -rf the /tmp/eas-local-remote-src/<id>/ copy on the server
+  └─ rm -rf the /tmp/ssheas-remote-src/<id>/ copy on the server
 ```
 
 Your project's actual `node_modules`/`.gradle`/git history are never
@@ -112,15 +112,15 @@ see "Local mode" below.)
 ## Setup
 
 **On your laptop (for `--remote` mode — the recommended path):** nothing
-beyond having `ssh`/`scp`/`tar` and a copy of this repo for the `eas-local`
+beyond having `ssh`/`scp`/`tar` and a copy of this repo for the `ssheas`
 script itself:
 
 ```bash
 git clone https://github.com/DEXA-IT-Solutions-Pvt-LTD/eas-local-builder.git
 ```
 
-- **macOS/Linux**: `ssh`/`scp`/`tar` are already there. Use `eas-local`.
-- **Windows**: use `eas-local.ps1` (PowerShell) instead — same flags, same
+- **macOS/Linux**: `ssh`/`scp`/`tar` are already there. Use `ssheas`.
+- **Windows**: use `ssheas.ps1` (PowerShell) instead — same flags, same
   behavior. It needs `tar.exe` and the OpenSSH client, both bundled with
   Windows 10 (1803+) / Windows 11 by default. If `ssh`/`scp` aren't found:
   **Settings → Apps → Optional Features → Add a feature → OpenSSH Client**.
@@ -138,9 +138,27 @@ docker build -t admini-eas-builder:latest .
 
 Requires Docker Engine on the server. The image bundles Node, JDK 17,
 Android SDK cmdline-tools, and `eas-cli` — already built and live on
-`ec2-13-203-69-0.ap-south-1.compute.amazonaws.com` as of this writing.
+`your-server-host` as of this writing.
 
 ## Usage
+
+### One-time setup: `install.sh`
+
+Instead of typing the full path to `ssheas` every time, run the installer
+once — it clones this repo to a fixed location (`$XDG_DATA_HOME` or
+`~/.local/share/eas-local-builder`) and registers a `ssheas` shell
+function in `~/.bashrc`/`~/.zshrc`:
+
+```bash
+git clone https://github.com/DEXA-IT-Solutions-Pvt-LTD/eas-local-builder.git
+cd eas-local-builder
+./install.sh
+```
+
+It also scaffolds a `.env` for you to fill in via `ssheas config set` (see
+below). Safe to re-run later — it won't duplicate the rc file entry, and
+pulls updates if run again against an existing install. Takes effect in
+new shell sessions (or run `source ~/.bashrc`).
 
 **Remote mode (recommended)** — run from your laptop, inside the mobile
 app project directory, same as real `eas build`:
@@ -148,33 +166,42 @@ app project directory, same as real `eas build`:
 ```bash
 export EXPO_TOKEN=<token>
 cd ~/Admini-Mobile-App-Client
-/path/to/eas-local-builder/eas-local build --platform android --profile preview \
-  --remote ubuntu@ec2-13-203-69-0.ap-south-1.compute.amazonaws.com \
-  --key ~/nuketest/admini/Admini_t3.pem
+ssheas build --platform android --profile preview \
+  --remote ubuntu@your-server-host \
+  --key ~/keys/admini-build-server.pem
 ```
 
-**Skip retyping `--remote`/`--key` every time**: create a `.env` file next
-to the `eas-local` script (copy `.env.example`) with:
+(Without `install.sh`, replace `ssheas` above with the full path:
+`/path/to/eas-local-builder/ssheas`.)
 
-```
-EXPO_TOKEN=<token>
-EAS_LOCAL_REMOTE_HOST=ubuntu@ec2-13-203-69-0.ap-south-1.compute.amazonaws.com
-EAS_LOCAL_REMOTE_KEY=~/nuketest/admini/Admini_t3.pem
+**Skip retyping `--remote`/`--key` every time**: either create a `.env`
+file next to the `ssheas` script by hand (copy `.env.example`), or use the
+built-in `config` subcommand — no text editor needed:
+
+```bash
+/path/to/eas-local-builder/ssheas config set EXPO_TOKEN <token>
+/path/to/eas-local-builder/ssheas config set SSHEAS_REMOTE_HOST user@your-server-host
+/path/to/eas-local-builder/ssheas config set SSHEAS_REMOTE_KEY ~/keys/build-server.pem
 ```
 
 Then the whole thing collapses to:
 
 ```bash
 cd ~/Admini-Mobile-App-Client
-/path/to/eas-local-builder/eas-local build --platform android --profile preview
+/path/to/eas-local-builder/ssheas build --platform android --profile preview
 ```
 
 Any of `--remote`/`--key`/`--remote-dir` passed explicitly on the command
 line still override `.env` — this is just a default, not a lock-in.
 
+**Managing config**: `ssheas config list` shows current values (secrets
+like `EXPO_TOKEN` are masked), `ssheas config get KEY` prints one value
+raw, and `ssheas config remove KEY` deletes an entry. All of these just
+read/write the `.env` file next to the script — nothing fancier.
+
 Your project is tarred (excluding `node_modules`, `.git`, build output
 dirs), streamed to a throwaway directory on the server, built there, and
-the artifact is scp'd back to `./eas-local-output/` on your machine. The
+the artifact is scp'd back to `./ssheas-output/` on your machine. The
 remote copy is deleted afterward — nothing lingers on the server between
 builds except the Docker image and its warm dependency caches.
 
@@ -184,11 +211,11 @@ against a local path instead:
 
 ```bash
 cd ~/Admini-Mobile-App-Client
-/path/to/eas-local-builder/eas-local build --platform android --profile preview
+/path/to/eas-local-builder/ssheas build --platform android --profile preview
 ```
 
 No `export EXPO_TOKEN=...` needed here if a `.env` already exists next to
-`eas-local` (there's one set up on the server already) — both `eas-local`
+`ssheas` (there's one set up on the server already) — both `ssheas`
 and `scripts/run-build.sh` auto-load it when `EXPO_TOKEN` isn't already in
 the environment. An explicitly exported `EXPO_TOKEN` always takes priority
 over `.env`, so this doesn't get in the way of using a different token
@@ -199,7 +226,7 @@ In both modes, `--profile` maps directly to `eas.json` build profiles —
 Play Store `.aab`. The output file extension is picked automatically to
 match.
 
-**Underlying script** (what `eas-local` calls in local mode), if you need
+**Underlying script** (what `ssheas` calls in local mode), if you need
 to pass an explicit path instead of running from inside the project:
 
 ```bash
@@ -208,36 +235,80 @@ to pass an explicit path instead of running from inside the project:
 
 ## Usage (Windows)
 
-`eas-local.ps1` is the PowerShell counterpart to `eas-local` — same flags,
+`ssheas.ps1` is the PowerShell counterpart to `ssheas` — same flags,
 same remote-mode behavior (only remote mode is supported on Windows; local
 mode would need Docker + the Android SDK installed on Windows itself,
-which defeats the point). From PowerShell, inside the mobile app project
-directory:
+which defeats the point).
+
+### One-time setup: `install.ps1`
+
+Instead of typing the full path to `ssheas.ps1` every time, run the
+installer once — it clones this repo to a fixed location and registers an
+`ssheas` function in your PowerShell profile, so `ssheas` works as a
+plain command from any directory in any new PowerShell window:
+
+```powershell
+git clone https://github.com/DEXA-IT-Solutions-Pvt-LTD/eas-local-builder.git
+cd eas-local-builder
+.\install.ps1
+```
+
+It also scaffolds a `.env` from `.env.example` for you to fill in
+(`EXPO_TOKEN`, `SSHEAS_REMOTE_HOST`, `SSHEAS_REMOTE_KEY`). Safe to
+re-run later — it won't duplicate the profile entry, and updates the clone
+via `git pull` if run again from `LOCALAPPDATA`. If Windows PowerShell
+and PowerShell 7 are both in use, each has its own profile — re-run
+`install.ps1` from whichever one you'll actually use `ssheas` in.
+
+If your execution policy blocks running the installer (`... cannot be
+loaded because running scripts is disabled ...`), run once:
+`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
+
+After setup, from inside any Expo project directory:
+
+```powershell
+ssheas build --platform android --profile preview
+```
+
+(with `.env` filled in — otherwise pass `--remote`/`--key` explicitly, see
+below.)
+
+### Without the installer
+
+From PowerShell, inside the mobile app project directory:
 
 ```powershell
 $env:EXPO_TOKEN = "<token>"
 cd C:\path\to\Admini-Mobile-App-Client
-C:\path\to\eas-local-builder\eas-local.ps1 build --platform android --profile preview `
-  --remote ubuntu@ec2-13-203-69-0.ap-south-1.compute.amazonaws.com `
-  --key C:\keys\Admini_t3.pem
+C:\path\to\eas-local-builder\ssheas.ps1 build --platform android --profile preview `
+  --remote ubuntu@your-server-host `
+  --key C:\keys\admini-build-server.pem
 ```
 
 Same result as the bash version: project tarred, streamed to a throwaway
 directory on the server, built there, artifact and log copied back to
-`.\eas-local-output\` on the Windows machine, remote copy deleted after.
+`.\ssheas-output\` on the Windows machine, remote copy deleted after.
 
-**Skip retyping `--remote`/`--key` every time**: create a `.env` file next
-to `eas-local.ps1` (copy `.env.example`) with `EXPO_TOKEN`,
-`EAS_LOCAL_REMOTE_HOST`, and `EAS_LOCAL_REMOTE_KEY` — then the command
-collapses to just:
+**Skip retyping `--remote`/`--key` every time**: either create a `.env`
+file next to `ssheas.ps1` by hand (copy `.env.example`), or use the
+built-in `config` subcommand:
+
+```powershell
+ssheas config set EXPO_TOKEN <token>
+ssheas config set SSHEAS_REMOTE_HOST ubuntu@your-server-host
+ssheas config set SSHEAS_REMOTE_KEY C:\keys\admini-build-server.pem
+```
+
+Then the command collapses to just:
 
 ```powershell
 cd C:\path\to\Admini-Mobile-App-Client
-C:\path\to\eas-local-builder\eas-local.ps1 build --platform android --profile preview
+C:\path\to\eas-local-builder\ssheas.ps1 build --platform android --profile preview
 ```
 
 Any explicit `--remote`/`--key` flags on the command line still override
-`.env`.
+`.env`. `ssheas config list` / `ssheas config get KEY` / `ssheas config
+remove KEY` work the same as the bash version.
 
 > **Verified with PowerShell 7 on Linux against the real server** — both the
 > failure path (bad build profile: error surfaced live, log auto-fetched)
@@ -261,8 +332,8 @@ something fails you see the error immediately without doing anything extra.
   is running you can tail it from another shell with `tail -f logs/build-*.log`
   or `docker logs -f <container-name>` (the container name is printed at
   build start).
-- **Remote mode**: `eas-local` automatically copies the log back to your
-  machine into `./eas-local-output/logs/` after every run — pass or fail —
+- **Remote mode**: `ssheas` automatically copies the log back to your
+  machine into `./ssheas-output/logs/` after every run — pass or fail —
   so you don't need a separate SSH session to read the full error. The
   server also keeps its own copy at `~/eas-local-builder/logs/` if you do
   want to dig in directly there.
@@ -335,6 +406,6 @@ Documented here so they don't get re-debugged from scratch:
 - [ ] Network-isolate the build container from other production services
 - [ ] Publish the image to GHCR so servers can `docker pull` instead of
       `docker build` (image contains no secrets, safe to make public)
-- [x] ~~Decide on a recurring source-sync method~~ — resolved: `eas-local
+- [x] ~~Decide on a recurring source-sync method~~ — resolved: `ssheas
       --remote` tars and streams the project fresh per build, so nothing
       persists on the server between builds. No sync step needed.

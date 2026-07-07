@@ -1,20 +1,21 @@
 #!/bin/bash
 # Drop-in local-build wrapper that mirrors eas-cli's own syntax, so anyone
 # used to `eas build` can use this with zero new syntax to learn.
+# Name: ssh + self-hosted + eas.
 #
 # Local mode — build.sh/run-build.sh already installed on this machine:
-#   EXPO_TOKEN=xxx /path/to/eas-local build --platform android --profile preview
+#   EXPO_TOKEN=xxx /path/to/eas-local-builder/ssheas build --platform android --profile preview
 #
 # Remote mode — nothing needs to be pre-copied to the server. This tars your
 # project, streams it over SSH into a throwaway temp dir on the server,
 # triggers the build there, copies the artifact back, then deletes the
 # remote copy. Nothing of your source persists on the server afterward.
-#   EXPO_TOKEN=xxx /path/to/eas-local build --platform android --profile preview \
-#     --remote ubuntu@ec2-13-203-69-0.ap-south-1.compute.amazonaws.com \
-#     --key ~/nuketest/admini/Admini_t3.pem
+#   EXPO_TOKEN=xxx /path/to/eas-local-builder/ssheas build --platform android --profile preview \
+#     --remote ubuntu@your-server-host \
+#     --key ~/keys/admini-build-server.pem
 #
-# Add an alias so it's a literal drop-in swap for `eas`:
-#   alias eas-local=/path/to/eas-local-builder/eas-local
+# Add an alias so it's a one-word command:
+#   alias ssheas=/path/to/eas-local-builder/ssheas
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -24,35 +25,134 @@ PROFILE="preview"
 REMOTE_HOST=""
 REMOTE_KEY=""
 REMOTE_DIR="eas-local-builder"
-OUT_DIR="./eas-local-output"
+OUT_DIR="./ssheas-output"
+
+ENV_FILE="$SCRIPT_DIR/.env"
 
 COMMAND="${1:-}"
 shift || true
 
 usage() {
   cat >&2 <<'EOF'
-Usage: eas-local build --platform <android|ios> [--profile <name>] [options]
+Usage: ssheas build --platform <android|ios> [--profile <name>] [options]
+       ssheas config <list|get|set|remove> [args]
 
   --platform     android or ios (ios is not supported — needs macOS/Xcode)
   --profile      eas.json build profile to use (default: preview)
   --project-dir  path to the Expo project (default: current directory)
 
 Remote mode (build on a server instead of this machine):
-  --remote       ssh target, e.g. ubuntu@ec2-13-203-69-0.ap-south-1.compute.amazonaws.com
+  --remote       ssh target, e.g. ubuntu@your-server-host
   --key          path to SSH identity file (.pem)
   --remote-dir   path to eas-local-builder on the server (default: ~/eas-local-builder)
-  --out          local dir to copy the artifact into (default: ./eas-local-output)
+  --out          local dir to copy the artifact into (default: ./ssheas-output)
 
 Examples:
   cd ~/Admini-Mobile-App-Client
-  EXPO_TOKEN=xxx /path/to/eas-local-builder/eas-local build --platform android --profile preview
+  EXPO_TOKEN=xxx /path/to/eas-local-builder/ssheas build --platform android --profile preview
 
-  EXPO_TOKEN=xxx /path/to/eas-local-builder/eas-local build --platform android --profile preview \
-    --remote ubuntu@ec2-13-203-69-0.ap-south-1.compute.amazonaws.com \
-    --key ~/nuketest/admini/Admini_t3.pem
+  EXPO_TOKEN=xxx /path/to/eas-local-builder/ssheas build --platform android --profile preview \
+    --remote ubuntu@your-server-host \
+    --key ~/keys/admini-build-server.pem
+
+Config (manage .env next to this script, so you don't retype flags every run):
+  ssheas config list
+  ssheas config get EXPO_TOKEN
+  ssheas config set EXPO_TOKEN <value>
+  ssheas config set SSHEAS_REMOTE_HOST ubuntu@your-server-host
+  ssheas config set SSHEAS_REMOTE_KEY ~/keys/admini-build-server.pem
+  ssheas config remove EXPO_TOKEN
 EOF
   exit 1
 }
+
+mask_value() {
+  local v="$1" len
+  len=${#v}
+  if [ "$len" -le 8 ]; then
+    echo "********"
+  else
+    echo "${v:0:4}...${v: -4}"
+  fi
+}
+
+config_usage() {
+  echo "Usage: ssheas config <list|get|set|remove> [args]" >&2
+  exit 1
+}
+
+config_list() {
+  if [ ! -f "$ENV_FILE" ]; then
+    echo "No .env file yet at $ENV_FILE (use: ssheas config set KEY VALUE)"
+    return
+  fi
+  echo "Config in $ENV_FILE:"
+  while IFS='=' read -r key value; do
+    case "$key" in
+      ''|'#'*) continue ;;
+    esac
+    case "$key" in
+      *TOKEN*|*SECRET*|*PASSWORD*) echo "  $key=$(mask_value "$value")" ;;
+      *) echo "  $key=$value" ;;
+    esac
+  done < "$ENV_FILE"
+}
+
+config_get() {
+  local key="${1:?Usage: ssheas config get KEY}"
+  if [ ! -f "$ENV_FILE" ]; then
+    echo "error: no .env file yet at $ENV_FILE" >&2
+    exit 1
+  fi
+  local value
+  value="$(grep "^${key}=" "$ENV_FILE" | tail -1 | cut -d'=' -f2-)"
+  if [ -z "$value" ]; then
+    echo "error: $key not set in $ENV_FILE" >&2
+    exit 1
+  fi
+  echo "$value"
+}
+
+config_set() {
+  local key="${1:?Usage: ssheas config set KEY VALUE}"
+  local value="${2:?Usage: ssheas config set KEY VALUE}"
+  touch "$ENV_FILE"
+  if grep -q "^${key}=" "$ENV_FILE"; then
+    local tmp
+    tmp="$(mktemp)"
+    awk -v k="$key" -v v="$value" -F'=' 'BEGIN{OFS="="} $1==k {print k,v; next} {print}' "$ENV_FILE" > "$tmp"
+    mv "$tmp" "$ENV_FILE"
+  else
+    echo "${key}=${value}" >> "$ENV_FILE"
+  fi
+  echo "==> Set $key in $ENV_FILE"
+}
+
+config_remove() {
+  local key="${1:?Usage: ssheas config remove KEY}"
+  if [ ! -f "$ENV_FILE" ]; then
+    echo "error: no .env file yet at $ENV_FILE" >&2
+    exit 1
+  fi
+  local tmp
+  tmp="$(mktemp)"
+  grep -v "^${key}=" "$ENV_FILE" > "$tmp" || true
+  mv "$tmp" "$ENV_FILE"
+  echo "==> Removed $key from $ENV_FILE (if it was set)"
+}
+
+if [ "$COMMAND" = "config" ]; then
+  SUBCOMMAND="${1:-}"
+  shift || true
+  case "$SUBCOMMAND" in
+    list) config_list ;;
+    get) config_get "$1" ;;
+    set) config_set "$1" "$2" ;;
+    remove|rm) config_remove "$1" ;;
+    *) config_usage ;;
+  esac
+  exit 0
+fi
 
 [ "$COMMAND" = "build" ] || usage
 
@@ -77,11 +177,11 @@ if [ ! -f "$PROJECT_DIR/eas.json" ]; then
 fi
 
 # Auto-load .env next to this script for anything not already exported —
-# EXPO_TOKEN, and optionally EAS_LOCAL_REMOTE_HOST / EAS_LOCAL_REMOTE_KEY /
-# EAS_LOCAL_REMOTE_DIR so --remote/--key/--remote-dir don't need to be
+# EXPO_TOKEN, and optionally SSHEAS_REMOTE_HOST / SSHEAS_REMOTE_KEY /
+# SSHEAS_REMOTE_DIR so --remote/--key/--remote-dir don't need to be
 # typed on every run. Anything already exported always takes priority —
 # read line by line rather than `source` so .env can't clobber it.
-if [ -f "$SCRIPT_DIR/.env" ]; then
+if [ -f "$ENV_FILE" ]; then
   while IFS='=' read -r key value; do
     case "$key" in
       ''|'#'*) continue ;;
@@ -89,14 +189,14 @@ if [ -f "$SCRIPT_DIR/.env" ]; then
     if [ -z "${!key:-}" ]; then
       export "$key=$value"
     fi
-  done < "$SCRIPT_DIR/.env"
+  done < "$ENV_FILE"
 fi
 
 : "${EXPO_TOKEN:?EXPO_TOKEN env var is required (export it, or create .env next to this script)}"
 
-[ -z "$REMOTE_HOST" ] && REMOTE_HOST="${EAS_LOCAL_REMOTE_HOST:-}"
-[ -z "$REMOTE_KEY" ] && REMOTE_KEY="${EAS_LOCAL_REMOTE_KEY:-}"
-[ "$REMOTE_DIR" = "eas-local-builder" ] && REMOTE_DIR="${EAS_LOCAL_REMOTE_DIR:-$REMOTE_DIR}"
+[ -z "$REMOTE_HOST" ] && REMOTE_HOST="${SSHEAS_REMOTE_HOST:-}"
+[ -z "$REMOTE_KEY" ] && REMOTE_KEY="${SSHEAS_REMOTE_KEY:-}"
+[ "$REMOTE_DIR" = "eas-local-builder" ] && REMOTE_DIR="${SSHEAS_REMOTE_DIR:-$REMOTE_DIR}"
 
 # ---------------------------------------------------------------------------
 # Local mode: everything (image, scripts) already lives on this machine.

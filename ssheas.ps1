@@ -1,7 +1,8 @@
-# Windows PowerShell counterpart to `eas-local` (bash). Same flags, same
+# Windows PowerShell counterpart to `ssheas` (bash). Same flags, same
 # behavior: tars the project, streams it to a throwaway dir on the Linux
 # build server over SSH, triggers the build there, copies the artifact (and
 # log) back, then deletes the remote copy.
+# Name: ssh + self-hosted + eas.
 #
 # Only --remote mode is supported here — building locally would require
 # Docker + the Android SDK on Windows itself, which defeats the point.
@@ -12,9 +13,9 @@
 #
 # Usage:
 #   $env:EXPO_TOKEN = "<token>"
-#   .\eas-local.ps1 build --platform android --profile preview `
-#     --remote ubuntu@ec2-13-203-69-0.ap-south-1.compute.amazonaws.com `
-#     --key C:\keys\Admini_t3.pem
+#   .\ssheas.ps1 build --platform android --profile preview `
+#     --remote ubuntu@your-server-host `
+#     --key C:\keys\admini-build-server.pem
 #
 # Tip: run from inside the mobile app project directory, same as real
 # `eas build` — or pass --project-dir explicitly.
@@ -22,39 +23,122 @@
 # Tip: create a .env file next to this script to avoid retyping
 # --remote/--key/--remote-dir every time:
 #   EXPO_TOKEN=<token>
-#   EAS_LOCAL_REMOTE_HOST=ubuntu@ec2-13-203-69-0.ap-south-1.compute.amazonaws.com
-#   EAS_LOCAL_REMOTE_KEY=C:\keys\Admini_t3.pem
-# Then just: .\eas-local.ps1 build --platform android --profile preview
+#   SSHEAS_REMOTE_HOST=ubuntu@your-server-host
+#   SSHEAS_REMOTE_KEY=C:\keys\admini-build-server.pem
+# Then just: .\ssheas.ps1 build --platform android --profile preview
+#
+# Tip: run install.ps1 once to register a `ssheas` command so you don't
+# need the full path at all.
 
 $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$EnvFile = Join-Path $ScriptDir ".env"
 $ProjectDir = (Get-Location).Path
 $Platform = "android"
 $Profile_ = "preview"
 $RemoteHost = ""
 $RemoteKey = ""
 $RemoteDir = "eas-local-builder"
-$OutDir = ".\eas-local-output"
+$OutDir = ".\ssheas-output"
 
 function Show-Usage {
     Write-Host @"
-Usage: eas-local.ps1 build --platform <android|ios> --remote <user@host> --key <path> [options]
+Usage: ssheas build --platform <android|ios> --remote <user@host> --key <path> [options]
+       ssheas config <list|get|set|remove> [args]
 
   --platform     android (ios needs macOS/Xcode -- not supported here)
   --profile      eas.json build profile to use (default: preview)
   --project-dir  path to the Expo project (default: current directory)
-  --remote       ssh target, e.g. ubuntu@ec2-13-203-69-0.ap-south-1.compute.amazonaws.com
+  --remote       ssh target, e.g. ubuntu@your-server-host
   --key          path to SSH identity file (.pem)
   --remote-dir   path to eas-local-builder on the server (default: eas-local-builder)
-  --out          local dir to copy the artifact into (default: .\eas-local-output)
+  --out          local dir to copy the artifact into (default: .\ssheas-output)
 
 Example:
   `$env:EXPO_TOKEN = "..."
-  .\eas-local.ps1 build --platform android --profile preview ``
-    --remote ubuntu@ec2-13-203-69-0.ap-south-1.compute.amazonaws.com --key C:\keys\Admini_t3.pem
+  ssheas build --platform android --profile preview ``
+    --remote ubuntu@your-server-host --key C:\keys\admini-build-server.pem
+
+Config (manage .env next to this script, so you don't retype flags every run):
+  ssheas config list
+  ssheas config get EXPO_TOKEN
+  ssheas config set EXPO_TOKEN <value>
+  ssheas config set SSHEAS_REMOTE_HOST ubuntu@your-server-host
+  ssheas config set SSHEAS_REMOTE_KEY C:\keys\admini-build-server.pem
+  ssheas config remove EXPO_TOKEN
 "@
     exit 1
+}
+
+function Mask-Value {
+    param([string]$Value)
+    if ($Value.Length -le 8) { return "********" }
+    return "$($Value.Substring(0,4))...$($Value.Substring($Value.Length - 4))"
+}
+
+function Read-EnvLines {
+    if (-not (Test-Path $EnvFile)) { return @() }
+    return Get-Content $EnvFile | Where-Object { $_ -match '^[^#=]+=' }
+}
+
+function Config-List {
+    $lines = Read-EnvLines
+    if ($lines.Count -eq 0) {
+        Write-Host "No .env file yet at $EnvFile (use: ssheas config set KEY VALUE)"
+        return
+    }
+    Write-Host "Config in ${EnvFile}:"
+    foreach ($line in $lines) {
+        $key, $value = $line -split '=', 2
+        if ($key -match 'TOKEN|SECRET|PASSWORD') {
+            Write-Host "  $key=$(Mask-Value $value)"
+        } else {
+            Write-Host "  $key=$value"
+        }
+    }
+}
+
+function Config-Get {
+    param([string]$Key)
+    if (-not $Key) { Write-Error "Usage: ssheas config get KEY"; exit 1 }
+    $line = Read-EnvLines | Where-Object { $_ -match "^$([regex]::Escape($Key))=" } | Select-Object -Last 1
+    if (-not $line) { Write-Error "$Key not set in $EnvFile"; exit 1 }
+    ($line -split '=', 2)[1]
+}
+
+function Config-Set {
+    param([string]$Key, [string]$Value)
+    if (-not $Key -or -not $Value) { Write-Error "Usage: ssheas config set KEY VALUE"; exit 1 }
+    $lines = @(Read-EnvLines)
+    $found = $false
+    $newLines = @(foreach ($line in $lines) {
+        $existingKey = ($line -split '=', 2)[0]
+        if ($existingKey -eq $Key) { $found = $true; "$Key=$Value" } else { $line }
+    })
+    if (-not $found) { $newLines += "$Key=$Value" }
+    Set-Content -Path $EnvFile -Value $newLines
+    Write-Host "==> Set $Key in $EnvFile"
+}
+
+function Config-Remove {
+    param([string]$Key)
+    if (-not $Key) { Write-Error "Usage: ssheas config remove KEY"; exit 1 }
+    $lines = @(Read-EnvLines) | Where-Object { ($_ -split '=', 2)[0] -ne $Key }
+    Set-Content -Path $EnvFile -Value $lines
+    Write-Host "==> Removed $Key from $EnvFile (if it was set)"
+}
+
+if ($args.Count -gt 0 -and $args[0] -eq "config") {
+    switch ($args[1]) {
+        "list"          { Config-List }
+        "get"           { Config-Get $args[2] }
+        "set"           { Config-Set $args[2] $args[3] }
+        "remove"        { Config-Remove $args[2] }
+        "rm"            { Config-Remove $args[2] }
+        default         { Show-Usage }
+    }
+    exit 0
 }
 
 if ($args.Count -eq 0 -or $args[0] -ne "build") { Show-Usage }
@@ -84,12 +168,11 @@ if (-not (Test-Path (Join-Path $ProjectDir "eas.json"))) {
 }
 
 # Auto-load .env next to this script for anything not already set via env
-# var or flag — EXPO_TOKEN, and optionally EAS_LOCAL_REMOTE_HOST /
-# EAS_LOCAL_REMOTE_KEY / EAS_LOCAL_REMOTE_DIR so --remote/--key/--remote-dir
+# var or flag — EXPO_TOKEN, and optionally SSHEAS_REMOTE_HOST /
+# SSHEAS_REMOTE_KEY / SSHEAS_REMOTE_DIR so --remote/--key/--remote-dir
 # don't need to be typed on every single run.
-$envFile = Join-Path $ScriptDir ".env"
-if (Test-Path $envFile) {
-    Get-Content $envFile | ForEach-Object {
+if (Test-Path $EnvFile) {
+    Get-Content $EnvFile | ForEach-Object {
         if ($_ -match '^\s*([^#=][^=]*)=(.*)$') {
             $name = $matches[1].Trim()
             if (-not [System.Environment]::GetEnvironmentVariable($name)) {
@@ -103,12 +186,12 @@ if (-not $env:EXPO_TOKEN) {
     exit 1
 }
 
-if (-not $RemoteHost) { $RemoteHost = $env:EAS_LOCAL_REMOTE_HOST }
-if (-not $RemoteKey) { $RemoteKey = $env:EAS_LOCAL_REMOTE_KEY }
-if ($RemoteDir -eq "eas-local-builder" -and $env:EAS_LOCAL_REMOTE_DIR) { $RemoteDir = $env:EAS_LOCAL_REMOTE_DIR }
+if (-not $RemoteHost) { $RemoteHost = $env:SSHEAS_REMOTE_HOST }
+if (-not $RemoteKey) { $RemoteKey = $env:SSHEAS_REMOTE_KEY }
+if ($RemoteDir -eq "eas-local-builder" -and $env:SSHEAS_REMOTE_DIR) { $RemoteDir = $env:SSHEAS_REMOTE_DIR }
 
 if (-not $RemoteHost) {
-    Write-Error "This Windows script only supports --remote mode. Pass --remote <user@host> --key <path>, or set EAS_LOCAL_REMOTE_HOST/EAS_LOCAL_REMOTE_KEY in .env."
+    Write-Error "This Windows script only supports --remote mode. Pass --remote <user@host> --key <path>, or set SSHEAS_REMOTE_HOST/SSHEAS_REMOTE_KEY in .env."
     exit 1
 }
 if ($Platform -eq "ios") {
