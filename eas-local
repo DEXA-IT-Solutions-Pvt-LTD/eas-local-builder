@@ -1,0 +1,54 @@
+#!/bin/bash
+# Drop-in local-build wrapper that mirrors eas-cli's own syntax, so anyone
+# used to `eas build` can use this with zero new syntax to learn.
+#
+# Run it from inside your Expo project (same as real `eas build`):
+#   EXPO_TOKEN=xxx /path/to/eas-local build --platform android --profile preview
+#
+# Or add an alias so it's literally a drop-in swap for `eas`:
+#   alias eas-local=/path/to/eas-local-builder/eas-local
+#   eas-local build --platform android --profile preview
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$PWD"
+PLATFORM="android"
+PROFILE="preview"
+
+COMMAND="${1:-}"
+shift || true
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: eas-local build --platform <android|ios> [--profile <name>] [--project-dir <path>]
+
+  --platform     android or ios (ios is not supported — needs macOS/Xcode)
+  --profile      eas.json build profile to use (default: preview)
+  --project-dir  path to the Expo project (default: current directory)
+
+Example:
+  cd ~/Admini-Mobile-App-Client
+  EXPO_TOKEN=xxx /path/to/eas-local-builder/eas-local build --platform android --profile preview
+EOF
+  exit 1
+}
+
+[ "$COMMAND" = "build" ] || usage
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --platform) PLATFORM="$2"; shift 2 ;;
+    --profile) PROFILE="$2"; shift 2 ;;
+    --project-dir) PROJECT_DIR="$2"; shift 2 ;;
+    -h|--help) usage ;;
+    *) echo "error: unknown flag '$1'" >&2; usage ;;
+  esac
+done
+
+if [ ! -f "$PROJECT_DIR/eas.json" ]; then
+  echo "error: '$PROJECT_DIR' doesn't look like an Expo project (no eas.json found)." >&2
+  echo "Run this from inside your project directory, or pass --project-dir." >&2
+  exit 1
+fi
+
+exec "$SCRIPT_DIR/scripts/run-build.sh" "$PROJECT_DIR" "$PLATFORM" "$PROFILE"
