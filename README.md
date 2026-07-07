@@ -112,14 +112,21 @@ see "Local mode" below.)
 ## Setup
 
 **On your laptop (for `--remote` mode — the recommended path):** nothing
-beyond having `ssh`/`scp`/`tar` (already on macOS/Linux; on Windows use
-WSL or Git Bash) and a copy of this repo for the `eas-local` script itself:
+beyond having `ssh`/`scp`/`tar` and a copy of this repo for the `eas-local`
+script itself:
 
 ```bash
 git clone https://github.com/DEXA-IT-Solutions-Pvt-LTD/eas-local-builder.git
 ```
 
-No Docker required locally — the build runs on the server.
+- **macOS/Linux**: `ssh`/`scp`/`tar` are already there. Use `eas-local`.
+- **Windows**: use `eas-local.ps1` (PowerShell) instead — same flags, same
+  behavior. It needs `tar.exe` and the OpenSSH client, both bundled with
+  Windows 10 (1803+) / Windows 11 by default. If `ssh`/`scp` aren't found:
+  **Settings → Apps → Optional Features → Add a feature → OpenSSH Client**.
+  See "Usage (Windows)" below.
+
+No Docker required locally in either case — the build runs on the server.
 
 **On the server (one-time):**
 
@@ -182,6 +189,33 @@ to pass an explicit path instead of running from inside the project:
 ```bash
 ./scripts/run-build.sh /path/to/project android preview
 ```
+
+## Usage (Windows)
+
+`eas-local.ps1` is the PowerShell counterpart to `eas-local` — same flags,
+same remote-mode behavior (only remote mode is supported on Windows; local
+mode would need Docker + the Android SDK installed on Windows itself,
+which defeats the point). From PowerShell, inside the mobile app project
+directory:
+
+```powershell
+$env:EXPO_TOKEN = "<token>"
+cd C:\path\to\Admini-Mobile-App-Client
+C:\path\to\eas-local-builder\eas-local.ps1 build --platform android --profile preview `
+  --remote ubuntu@ec2-13-203-69-0.ap-south-1.compute.amazonaws.com `
+  --key C:\keys\Admini_t3.pem
+```
+
+Same result as the bash version: project tarred, streamed to a throwaway
+directory on the server, built there, artifact and log copied back to
+`.\eas-local-output\` on the Windows machine, remote copy deleted after.
+
+> **Not yet smoke-tested on a real Windows machine.** The logic mirrors the
+> bash version closely and the remote-side commands are identical (they run
+> over SSH regardless of client OS), but this hasn't had a live run from an
+> actual Windows box yet — the first real run is the real test. If
+> `tar`/`ssh`/`scp` throw errors, confirm the OpenSSH Client optional
+> feature is installed.
 
 ## Getting logs — including on failure
 
