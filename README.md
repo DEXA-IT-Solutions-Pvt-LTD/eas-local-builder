@@ -177,11 +177,24 @@ to pass an explicit path instead of running from inside the project:
 ./scripts/run-build.sh /path/to/project android preview
 ```
 
-On the server, each run writes a full log to
-`~/eas-local-builder/logs/build-<timestamp>-<platform>.log` (also streamed
-live), and while a build is running you can tail it from another SSH
-session with `tail -f logs/build-*.log` or `docker logs -f <container-name>`
-(the container name is printed at build start).
+## Getting logs — including on failure
+
+The build output streams live to your terminal in both modes, so if
+something fails you see the error immediately without doing anything extra.
+
+- **Local mode**: the full log is also saved on disk at
+  `logs/build-<timestamp>-<platform>.log`, success or failure. While a build
+  is running you can tail it from another shell with `tail -f logs/build-*.log`
+  or `docker logs -f <container-name>` (the container name is printed at
+  build start).
+- **Remote mode**: `eas-local` automatically copies the log back to your
+  machine into `./eas-local-output/logs/` after every run — pass or fail —
+  so you don't need a separate SSH session to read the full error. The
+  server also keeps its own copy at `~/eas-local-builder/logs/` if you do
+  want to dig in directly there.
+
+Either way, a failure exits non-zero and prints the log location, so
+scripting around this (e.g. CI, or a "did it work" check) is straightforward.
 
 ## What it does NOT solve
 

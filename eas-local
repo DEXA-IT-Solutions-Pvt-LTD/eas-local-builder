@@ -119,6 +119,17 @@ tar czf - \
   -C "$PROJECT_DIR" . \
   | ssh "${SSH_OPTS[@]}" "$REMOTE_HOST" "tar xzf - -C '$REMOTE_SRC'"
 
+fetch_log() {
+  local remote_log
+  remote_log="$(ssh "${SSH_OPTS[@]}" "$REMOTE_HOST" \
+    "find '$REMOTE_DIR/logs' -maxdepth 1 -type f -newer '$REMOTE_MARKER' -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-")"
+  if [ -n "$remote_log" ]; then
+    mkdir -p "$OUT_DIR/logs"
+    scp "${SSH_OPTS[@]}" "$REMOTE_HOST:$remote_log" "$OUT_DIR/logs/" >/dev/null
+    echo "==> Log saved to $OUT_DIR/logs/$(basename "$remote_log")"
+  fi
+}
+
 echo "==> Triggering build on $REMOTE_HOST"
 set +e
 ssh "${SSH_OPTS[@]}" "$REMOTE_HOST" \
@@ -126,8 +137,13 @@ ssh "${SSH_OPTS[@]}" "$REMOTE_HOST" \
 BUILD_STATUS=$?
 set -e
 
+# Always pull the log back — on failure this is the only way to see the
+# full error without a separate SSH session (the live stream above already
+# showed it, but this makes it easy to save/share/re-read).
+fetch_log
+
 if [ "$BUILD_STATUS" -ne 0 ]; then
-  echo "==> Remote build FAILED (exit $BUILD_STATUS)" >&2
+  echo "==> Remote build FAILED (exit $BUILD_STATUS). See log above." >&2
   exit "$BUILD_STATUS"
 fi
 
