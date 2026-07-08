@@ -120,6 +120,12 @@ automatically pruned after **3 days** — each build run deletes anything
 older than that before starting, so disk usage doesn't grow forever.
 Override with `RETENTION_DAYS=<n>` if you need a different window.
 
+**Build timing**: every run prints its total duration at the end
+(`==> Done in 19m 22s. ...` or `==> Build FAILED ... after 0m 45s.`) and
+appends a row to `~/eas-local-builder/logs/build-history.csv` on the
+server (`timestamp,platform,profile,status,duration_seconds,duration_human`),
+so you can track how build times trend over time.
+
 ## Commands & flags reference
 
 ### `ssheas build`

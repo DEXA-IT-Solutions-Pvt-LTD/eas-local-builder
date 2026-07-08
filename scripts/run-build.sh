@@ -60,6 +60,14 @@ flock -n 9 || { echo "error: another build is already running" >&2; exit 1; }
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 LOG_FILE="$LOG_DIR/build-${STAMP}-${PLATFORM}.log"
 CONTAINER_NAME="admini-eas-build-${STAMP}"
+HISTORY_FILE="$LOG_DIR/build-history.csv"
+[ -f "$HISTORY_FILE" ] || echo "timestamp_utc,platform,profile,status,duration_seconds,duration_human" > "$HISTORY_FILE"
+START_EPOCH="$(date +%s)"
+
+format_duration() {
+  local total="$1"
+  printf '%dm %02ds' "$((total / 60))" "$((total % 60))"
+}
 
 echo "==> Starting build (platform=$PLATFORM, profile=$PROFILE, timeout=${BUILD_TIMEOUT}s)"
 echo "==> Live log: $LOG_FILE"
@@ -89,13 +97,20 @@ timeout "$BUILD_TIMEOUT" docker run --rm \
 BUILD_STATUS="${PIPESTATUS[0]}"
 set -e
 
+END_EPOCH="$(date +%s)"
+DURATION_SEC="$((END_EPOCH - START_EPOCH))"
+DURATION_HUMAN="$(format_duration "$DURATION_SEC")"
+
 if [ "$BUILD_STATUS" -ne 0 ]; then
-  echo "==> Build FAILED (exit $BUILD_STATUS). Full log: $LOG_FILE" >&2
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ),$PLATFORM,$PROFILE,failed,$DURATION_SEC,$DURATION_HUMAN" >> "$HISTORY_FILE"
+  echo "==> Build FAILED (exit $BUILD_STATUS) after $DURATION_HUMAN. Full log: $LOG_FILE" >&2
   exit "$BUILD_STATUS"
 fi
+
+echo "$(date -u +%Y-%m-%dT%H:%M:%SZ),$PLATFORM,$PROFILE,success,$DURATION_SEC,$DURATION_HUMAN" >> "$HISTORY_FILE"
 
 # Newest file in OUTPUT_DIR is this run's artifact — flock guarantees only
 # one build (thus one writer) at a time, so this is unambiguous.
 ARTIFACT="$(find "$OUTPUT_DIR" -maxdepth 1 -type f ! -name '.gitkeep' -printf '%T@ %p\n' | sort -rn | head -1 | cut -d' ' -f2-)"
-echo "==> Done. Log saved to $LOG_FILE"
+echo "==> Done in $DURATION_HUMAN. Log saved to $LOG_FILE"
 echo "ARTIFACT: $ARTIFACT"

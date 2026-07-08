@@ -360,6 +360,25 @@ environment. Verified with synthetically-aged files (`touch -d`): files
 older than the window were removed, files inside the window and
 `.gitkeep` were preserved.
 
+### Build duration tracking
+
+`run-build.sh` times each build from right after the `flock` lock is
+acquired (so queueing time behind another build isn't counted) to when
+the container exits, success or failure. It prints the duration in the
+final status line and appends a row to
+`~/eas-local-builder/logs/build-history.csv`
+(`timestamp_utc,platform,profile,status,duration_seconds,duration_human`),
+creating the file with a header on first use. This gives a simple way to
+track build-time trends over time (e.g. after bumping CPU/memory limits,
+or after native dependency changes) without needing to grep timestamps
+out of individual log files. Verified via a fast local failure (missing
+Docker image): duration and CSV row both recorded correctly.
+
+To check on a build that's currently running without waiting for it to
+finish, compare `docker inspect -f '{{.State.StartedAt}}' <container>`
+against the current time — this is how we've confirmed live progress
+during real builds without disturbing the running process.
+
 ## What it does NOT solve
 
 - **iOS/macOS builds** — require real macOS + Xcode. Out of scope for this
