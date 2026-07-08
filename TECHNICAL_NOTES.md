@@ -346,6 +346,20 @@ something fails you see the error immediately without doing anything extra.
 Either way, a failure exits non-zero and prints the log location, so
 scripting around this (e.g. CI, or a "did it work" check) is straightforward.
 
+### Server-side retention
+
+`run-build.sh`'s server-side `output/` and `logs/` directories are never
+cleared by the copy-back step (only the tarred *source* copy under
+`/tmp/eas-local-remote-src/` is deleted after each remote build) — so
+without pruning, every build's artifact and log would accumulate on the
+server forever. Each run now deletes anything older than
+`RETENTION_DAYS` (default 3) from both directories before starting,
+using `find ... -mtime +N`, and logs exactly what it removed rather than
+pruning silently. Override per-run with `RETENTION_DAYS=<n>` in the
+environment. Verified with synthetically-aged files (`touch -d`): files
+older than the window were removed, files inside the window and
+`.gitkeep` were preserved.
+
 ## What it does NOT solve
 
 - **iOS/macOS builds** — require real macOS + Xcode. Out of scope for this

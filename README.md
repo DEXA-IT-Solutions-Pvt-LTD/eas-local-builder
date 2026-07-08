@@ -113,6 +113,13 @@ either way. In remote mode the log is also copied back automatically
 to `./ssheas-output/logs/`, pass or fail — no separate SSH session
 needed to see what went wrong.
 
+**Server-side retention**: every build's artifact and log also stay on
+the server itself (in addition to being copied to your machine), in
+`~/eas-local-builder/output/` and `~/eas-local-builder/logs/`. These are
+automatically pruned after **3 days** — each build run deletes anything
+older than that before starting, so disk usage doesn't grow forever.
+Override with `RETENTION_DAYS=<n>` if you need a different window.
+
 ## Commands & flags reference
 
 ### `ssheas build`

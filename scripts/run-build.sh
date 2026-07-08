@@ -33,7 +33,20 @@ fi
 
 OUTPUT_DIR="$SCRIPT_DIR/output"
 LOG_DIR="$SCRIPT_DIR/logs"
+RETENTION_DAYS="${RETENTION_DAYS:-3}"
 mkdir -p "$OUTPUT_DIR" "$LOG_DIR"
+
+# Server-side artifacts/logs are never deleted automatically otherwise --
+# they'd accumulate forever since every build writes new files here.
+# Prune anything older than RETENTION_DAYS before each run.
+for dir in "$OUTPUT_DIR" "$LOG_DIR"; do
+  OLD_FILES="$(find "$dir" -maxdepth 1 -type f ! -name '.gitkeep' -mtime "+${RETENTION_DAYS}")"
+  if [ -n "$OLD_FILES" ]; then
+    echo "==> Cleaning up files older than ${RETENTION_DAYS}d in $dir:"
+    echo "$OLD_FILES" | sed 's/^/     /'
+    echo "$OLD_FILES" | xargs rm -f
+  fi
+done
 
 if [ "$PLATFORM" = "ios" ]; then
   echo "error: iOS builds require macOS/Xcode — not possible in this Linux container." >&2
